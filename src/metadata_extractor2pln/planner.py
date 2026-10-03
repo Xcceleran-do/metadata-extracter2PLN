@@ -129,6 +129,12 @@ def discover_plan(
         required_properties=required,
         planner=planner,
     )
+
+    validate_backend_compatibility(
+        plan,
+        getattr(backend, "provider", None) if backend is not None else None,
+    )
+
     return plan, model, usage
 
 
@@ -276,19 +282,26 @@ def sanitize_plan(
 
 
 def validate_and_pin_plan(
-    plan: ExtractionPlan, required_properties: Sequence[str] = ()
+    plan: ExtractionPlan,
+    required_properties: Sequence[str] = (),
+    backend_provider: str | None = None,
 ) -> ExtractionPlan:
     names = {item.name for item in plan.properties}
     missing = set(_required_names(required_properties)) - names
+
     if missing:
         raise ValueError(
             f"plan is missing required properties: {', '.join(sorted(missing))}"
         )
+
+    validate_backend_compatibility(plan, backend_provider)
+
     expected = plan_fingerprint(plan)
+
     if plan.fingerprint and plan.fingerprint != expected:
         raise ValueError("plan fingerprint does not match its contents")
-    return plan.model_copy(update={"planner": "pinned", "fingerprint": expected})
 
+    return plan.model_copy(update={"planner": "pinned", "fingerprint": expected})
 
 def plan_fingerprint(plan: ExtractionPlan) -> str:
     return stable_hash(plan.model_dump(exclude={"fingerprint", "planner"}, mode="json"))
@@ -396,3 +409,23 @@ def _valid_paths(paths: Iterable[str], available: set[str]) -> list[str]:
 def _distinct_strings(values: Iterable[Any]) -> list[str]:
     counter = Counter(text_from_value(value).strip() for value in values)
     return [value for value, _ in counter.most_common() if value][:100]
+def validate_backend_compatibility(
+    plan: ExtractionPlan,
+    backend_provider: str | None,
+) -> None:
+    if backend_provider != "jev":
+        return
+
+    incompatible = [
+        item.name
+        for item in plan.properties
+        if item.extractor == "semantic_text"
+        and not item.allowed_values
+    ]
+
+    if incompatible:
+        raise ValueError(
+            "JEV semantic classification requires allowed_values for "
+            f"these properties: {', '.join(sorted(incompatible))}. "
+            "Define explicit allowed values before using JEV."
+        )

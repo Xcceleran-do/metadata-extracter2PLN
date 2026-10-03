@@ -220,3 +220,14 @@ def test_invalid_optional_semantic_value_is_not_fatal():
 
     assert properties == []
     assert errors == []
+
+
+def test_backend_errors_do_not_change_the_model_response_schema():
+    legacy = SemanticBatchResult.model_validate(
+        {"records": [{"record_index": 0, "values": []}]}
+    )
+    assert legacy.records[0].errors == []
+    schema = SemanticBatchResult.model_json_schema()
+    assert "errors" not in schema["$defs"]["SemanticRecordResult"]["properties"]
+    failed = SemanticRecordResult(record_index=0, errors=["provider unavailable"])
+    assert failed.model_dump()["errors"] == ["provider unavailable"]

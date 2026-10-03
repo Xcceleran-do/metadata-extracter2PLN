@@ -31,7 +31,11 @@ class MetadataService:
         return PlanResponse(plan=plan, model=model, usage=usage)
 
     def validate_plan(self, request: ValidatePlanRequest) -> ValidatePlanResponse:
-        plan = validate_and_pin_plan(request.plan, request.required_properties)
+        plan = validate_and_pin_plan(
+            request.plan,
+            request.required_properties,
+            self.backend.provider if self.backend is not None else None,
+        )
         return ValidatePlanResponse(valid=True, fingerprint=plan.fingerprint)
 
     def extract(self, request: ExtractRequest) -> ExtractResponse:
@@ -39,7 +43,10 @@ class MetadataService:
             raise ValueError(
                 "/v1/extract requires a fingerprinted plan; validate the plan first"
             )
-        plan = validate_and_pin_plan(request.plan)
+        plan = validate_and_pin_plan(
+            request.plan,
+            backend_provider=self.backend.provider if self.backend is not None else None,
+        )
         return extract_records(
             namespace=request.namespace,
             plan=plan,

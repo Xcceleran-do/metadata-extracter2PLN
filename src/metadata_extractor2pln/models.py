@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 
 NAME_PATTERN = r"^[a-z][a-z0-9-]{0,63}$"
@@ -96,6 +97,7 @@ class SemanticResult(ApiModel):
 class SemanticRecordResult(ApiModel):
     record_index: int = Field(ge=0, le=99)
     values: list[SemanticValue] = Field(default_factory=list, max_length=100)
+    errors: SkipJsonSchema[list[str]] = Field(default_factory=list, max_length=100)
 
 
 class SemanticBatchResult(ApiModel):

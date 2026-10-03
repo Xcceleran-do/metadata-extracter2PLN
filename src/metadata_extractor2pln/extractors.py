@@ -91,6 +91,7 @@ def extract_records(
                         )
                         continue
                     returned.add(index)
+                    errors_by_record[index].extend(semantic_record.errors)
                     extracted, semantic_errors = _validate_semantics(
                         semantic_record.values, semantic_specs, texts[index]
                     )

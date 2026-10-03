@@ -14,6 +14,14 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .config import Settings, get_settings
+from .request_context import (
+    RequestCancellation,
+    reset_request_cancelled,
+    reset_request_deadline,
+    set_request_cancelled,
+    set_request_deadline,
+)
+from .jev_backend import JEVBackend
 from .backends import BackendUnavailable
 from .bedrock import BedrockBackend
 from .models import (
@@ -85,14 +93,24 @@ def create_app(
 ) -> FastAPI:
     settings = settings or get_settings()
     settings.validate()
-    backend = BedrockBackend(
-        model=settings.bedrock_model,
-        region=settings.bedrock_region,
-        access_key=settings.bedrock_access_key,
-        secret_key=settings.bedrock_secret_key,
-        timeout_seconds=settings.model_timeout_seconds,
-        max_tokens=settings.bedrock_max_tokens,
-    )
+    if settings.model_provider == "jev":
+        backend = JEVBackend(
+            model=settings.jev_model,
+            api_key=settings.jev_api_key,
+            timeout_seconds=settings.model_timeout_seconds,
+            transport=settings.jev_transport,
+            openrouter_api_key=settings.openrouter_api_key,
+            openrouter_model=settings.openrouter_model,
+        )
+    else:
+        backend = BedrockBackend(
+            model=settings.bedrock_model,
+            region=settings.bedrock_region,
+            access_key=settings.bedrock_access_key,
+            secret_key=settings.bedrock_secret_key,
+            timeout_seconds=settings.model_timeout_seconds,
+            max_tokens=settings.bedrock_max_tokens,
+        )
     service = service or MetadataService(backend)
     app = FastAPI(
         title="metadata-extractor2PLN",
@@ -188,22 +206,48 @@ def create_app(
         )
 
     async def execute(function, request):
-        async with semaphore:
+        deadline = time.monotonic() + settings.request_timeout_seconds
+        cancelled = RequestCancellation()
+
+        def run():
+            deadline_token = set_request_deadline(deadline)
+            cancelled_token = set_request_cancelled(cancelled)
             try:
-                return await asyncio.wait_for(
-                    asyncio.to_thread(function, request),
-                    timeout=settings.request_timeout_seconds,
-                )
-            except TimeoutError:
-                return JSONResponse(
-                    status_code=504,
-                    content={
-                        "error": {
-                            "code": "request_timeout",
-                            "message": "processing exceeded its time limit",
-                        }
-                    },
-                )
+                return function(request)
+            finally:
+                reset_request_cancelled(cancelled_token)
+                reset_request_deadline(deadline_token)
+
+        def worker_done(task):
+            semaphore.release()
+            # Observe exceptions even if the request stopped awaiting this worker.
+            if not task.cancelled():
+                task.exception()
+
+        try:
+            async with asyncio.timeout(settings.request_timeout_seconds):
+                await semaphore.acquire()
+                try:
+                    task = asyncio.create_task(asyncio.to_thread(run))
+                except BaseException:
+                    semaphore.release()
+                    raise
+                task.add_done_callback(worker_done)
+                return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        except TimeoutError:
+            cancelled.set()
+            return JSONResponse(
+                status_code=504,
+                content={
+                    "error": {
+                        "code": "request_timeout",
+                        "message": "processing exceeded its time limit",
+                    }
+                },
+            )
 
     @app.get("/health")
     async def health():
